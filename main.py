@@ -197,10 +197,10 @@ def main(args):
         train_loader = get_dataloaders(args.dataset,
                                        batch_size=args.batch_size,
                                        logger=logger)
-        logger.info("Train {} with {} samples".format(args.dataset, len(train_loader.dataset)))
+        logger.info("Train {} with {} samples".format(args.dataset, len(train_loader)))
 
         # PREPARES MODEL
-        args.img_size = get_img_size(args.dataset)  # stores for metadata
+        args.img_size = get_img_size(args.dataset)  # stores for metadata #get_img_size(args.dataset)
         model = init_specific_model(args.model_type, args.img_size, args.latent_dim)
         logger.info('Num parameters in model: {}'.format(get_n_param(model)))
 
@@ -210,7 +210,7 @@ def main(args):
         model = model.to(device)  # make sure trainer and viz on same device
         gif_visualizer = GifTraversalsTraining(model, args.dataset, exp_dir)
         loss_f = get_loss_f(args.loss,
-                            n_data=len(train_loader.dataset),
+                            n_data=len(train_loader),
                             device=device,
                             **vars(args))
         trainer = Trainer(model, optimizer, loss_f,
@@ -218,7 +218,7 @@ def main(args):
                           logger=logger,
                           save_dir=exp_dir,
                           is_progress_bar=not args.no_progress_bar,
-                          gif_visualizer=gif_visualizer)
+                          gif_visualizer=None)
         trainer(train_loader,
                 epochs=args.epochs,
                 checkpoint_every=args.checkpoint_every,)
@@ -227,6 +227,7 @@ def main(args):
         save_model(trainer.model, exp_dir, metadata=vars(args))
 
     if args.is_metrics or not args.no_test:
+        print("Evaluation")
         model = load_model(exp_dir, is_gpu=not args.no_cuda)
         metadata = load_metadata(exp_dir)
         # TO-DO: currently uses train datatset

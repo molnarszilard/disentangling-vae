@@ -9,6 +9,7 @@ from timeit import default_timer
 from tqdm import trange, tqdm
 import numpy as np
 import torch
+import cv2
 
 from disvae.models.losses import get_loss_f
 from disvae.utils.math import log_density_gaussian
@@ -94,6 +95,20 @@ class Evaluator:
 
         return metric, losses
 
+    def save_latent_images(self,images):
+        save_path = "latent_samples/"
+        for i in range(10):
+            image = images[i*10].detach().cpu().numpy().astype(np.uint8)
+            while len(image.shape)>3:
+                image=image.squeeze(axis=0)
+            image = np.moveaxis(image,0,-1)
+            # print(image.shape)
+            # print(image.dtype)
+            # image=image.detach().cpu().numpy().astype(np.uint16)
+            path = save_path +"gim_reco_"+str(i)+".png"        
+            # save_image(image, path)
+            cv2.imwrite(path,image)
+
     def compute_losses(self, dataloader):
         """Compute all test losses.
 
@@ -102,11 +117,12 @@ class Evaluator:
         data_loader: torch.utils.data.DataLoader
         """
         storer = defaultdict(list)
-        for data, _ in tqdm(dataloader, leave=False, disable=not self.is_progress_bar):
+        for data in tqdm(dataloader, leave=False, disable=not self.is_progress_bar):
             data = data.to(self.device)
 
             try:
                 recon_batch, latent_dist, latent_sample = self.model(data)
+                # self.save_latent_images(recon_batch)
                 _ = self.loss_f(data, recon_batch, latent_dist, self.model.training,
                                 storer, latent_sample=latent_sample)
             except ValueError:

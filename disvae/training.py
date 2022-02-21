@@ -9,6 +9,8 @@ import torch
 from torch.nn import functional as F
 
 from disvae.utils.modelIO import save_model
+import numpy as np
+import cv2
 
 
 TRAIN_LOSSES_LOGFILE = "train_losses.log"
@@ -124,7 +126,8 @@ class Trainer():
         kwargs = dict(desc="Epoch {}".format(epoch + 1), leave=False,
                       disable=not self.is_progress_bar)
         with trange(len(data_loader), **kwargs) as t:
-            for _, (data, _) in enumerate(data_loader):
+            for data in data_loader:
+
                 iter_loss = self._train_iteration(data, storer)
                 epoch_loss += iter_loss
 
@@ -133,6 +136,16 @@ class Trainer():
 
         mean_epoch_loss = epoch_loss / len(data_loader)
         return mean_epoch_loss
+
+    def save_latent_images(self,images):
+        save_path = "latent_samples/"
+        for i in range(10):
+            image = images[i].detach().cpu().numpy().astype(np.uint8)
+            while len(image.shape)>3:
+                image=image.squeeze(axis=0)
+            image = np.moveaxis(image,0,-1)
+            path = save_path +"gim_reco_"+str(i)+".png"        
+            cv2.imwrite(path,image)
 
     def _train_iteration(self, data, storer):
         """
@@ -151,6 +164,7 @@ class Trainer():
 
         try:
             recon_batch, latent_dist, latent_sample = self.model(data)
+            self.save_latent_images(recon_batch*255)
             loss = self.loss_f(data, recon_batch, latent_dist, self.model.training,
                                storer, latent_sample=latent_sample)
             self.optimizer.zero_grad()

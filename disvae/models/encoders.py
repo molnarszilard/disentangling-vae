@@ -58,6 +58,9 @@ class EncoderBurgess(nn.Module):
         # If input image is 64x64 do fourth convolution
         if self.img_size[1] == self.img_size[2] == 64:
             self.conv_64 = nn.Conv2d(hid_channels, hid_channels, kernel_size, **cnn_kwargs)
+        if self.img_size[1] == self.img_size[2] == 128:
+            self.conv_128a = nn.Conv2d(hid_channels, hid_channels, kernel_size, **cnn_kwargs)
+            self.conv_128b = nn.Conv2d(hid_channels, hid_channels, kernel_size, **cnn_kwargs)
 
         # Fully connected layers
         self.lin1 = nn.Linear(np.product(self.reshape), hidden_dim)
@@ -75,6 +78,9 @@ class EncoderBurgess(nn.Module):
         x = torch.relu(self.conv3(x))
         if self.img_size[1] == self.img_size[2] == 64:
             x = torch.relu(self.conv_64(x))
+        if self.img_size[1] == self.img_size[2] == 128:
+            x = torch.relu(self.conv_128a(x))
+            x = torch.relu(self.conv_128b(x))
 
         # Fully connected layers with ReLu activations
         x = x.view((batch_size, -1))
@@ -85,5 +91,5 @@ class EncoderBurgess(nn.Module):
         # Log std-dev in paper (bear in mind)
         mu_logvar = self.mu_logvar_gen(x)
         mu, logvar = mu_logvar.view(-1, self.latent_dim, 2).unbind(-1)
-
+        
         return mu, logvar

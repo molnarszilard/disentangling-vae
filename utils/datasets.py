@@ -22,24 +22,43 @@ DATASETS_DICT = {"mnist": "MNIST",
                  "fashion": "FashionMNIST",
                  "dsprites": "DSprites",
                  "celeba": "CelebA",
-                 "chairs": "Chairs"}
+                 "chairs": "Chairs",
+                 "modelnetgim": "MNgim"}
+GIM_DATASETS = ["modelnetgim"]
 DATASETS = list(DATASETS_DICT.keys())
 
 
 def get_dataset(dataset):
     """Return the correct dataset."""
     dataset = dataset.lower()
-    try:
-        # eval because stores name as string in order to put it at top of file
-        return eval(DATASETS_DICT[dataset])
-    except KeyError:
-        raise ValueError("Unkown dataset: {}".format(dataset))
+    if dataset in GIM_DATASETS:
+        print("ok")
+    else:
+        try:
+            # eval because stores name as string in order to put it at top of file
+            return eval(DATASETS_DICT[dataset])
+        except KeyError:
+            raise ValueError("Unkown dataset: {}".format(dataset))
 
 
 def get_img_size(dataset):
     """Return the correct image size."""
-    return get_dataset(dataset).img_size
+    if dataset in GIM_DATASETS:
+        return (3,128,128)
+    else:
+        return get_dataset(dataset).img_size
 
+def train_dataloader(batch_size):
+        """
+        :return:  A DataLoader object of the training set.
+        :rtype:   torch.utils.data.DataLoader
+        """
+        # download the training set using torchvision if it hasn't already been downloaded
+        from .datasetloader import DatasetLoader
+        train_set = DatasetLoader(batch_size=batch_size)
+        # initialize a pytorch DataLoader to feed training batches into the model
+        train_loader = DataLoader(dataset=train_set, batch_size=batch_size, shuffle=True)
+        return train_loader
 
 def get_background(dataset):
     """Return the image background color."""
@@ -61,10 +80,14 @@ def get_dataloaders(dataset, root=None, shuffle=True, pin_memory=True,
     kwargs :
         Additional arguments to `DataLoader`. Default values are modified.
     """
-    pin_memory = pin_memory and torch.cuda.is_available  # only pin if GPU available
-    Dataset = get_dataset(dataset)
-    dataset = Dataset(logger=logger) if root is None else Dataset(root=root, logger=logger)
-    return DataLoader(dataset,
+    dataset = dataset.lower()
+    if dataset == 'modelnetgim':
+        return train_dataloader(batch_size)
+    else:
+        pin_memory = pin_memory and torch.cuda.is_available  # only pin if GPU available
+        Dataset = get_dataset(dataset)
+        dataset = Dataset(logger=logger) if root is None else Dataset(root=root, logger=logger)
+        return DataLoader(dataset,
                       batch_size=batch_size,
                       shuffle=shuffle,
                       pin_memory=pin_memory,

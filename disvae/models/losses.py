@@ -142,10 +142,18 @@ class BetaHLoss(BaseLoss):
         rec_loss = _reconstruction_loss(data, recon_data,
                                         storer=storer,
                                         distribution=self.rec_dist)
+        cd_loss = ChamferLoss()
+        # print(data.shape)
+        # print(recon_data.shape)
+        loss_cd = torch.sum(cd_loss(data,recon_data))
         kl_loss = _kl_normal_loss(*latent_dist, storer)
         anneal_reg = (linear_annealing(0, 1, self.n_train_steps, self.steps_anneal)
                       if is_train else 1)
-        loss = rec_loss + anneal_reg * (self.beta * kl_loss)
+        print(f'(CD: {loss_cd.item(): .4f}) '
+                f'(KL: {kl_loss.item(): .4f}) '
+                f'(RL: {rec_loss.item(): .4f}) '
+                )
+        loss = rec_loss + anneal_reg * (self.beta * kl_loss) + loss_cd
 
         if storer is not None:
             storer['loss'].append(loss.item())
@@ -190,11 +198,18 @@ class BetaBLoss(BaseLoss):
                                         storer=storer,
                                         distribution=self.rec_dist)
         kl_loss = _kl_normal_loss(*latent_dist, storer)
+        cd_loss = ChamferLoss()
+        # print(data.shape)
+        # print(recon_data.shape)
+        loss_cd = torch.sum(cd_loss(data,recon_data))
 
         C = (linear_annealing(self.C_init, self.C_fin, self.n_train_steps, self.steps_anneal)
              if is_train else self.C_fin)
-
-        loss = rec_loss + self.gamma * (kl_loss - C).abs()
+        print(f'(CD: {loss_cd.item(): .4f}) '
+                f'(KL: {kl_loss.item(): .4f}) '
+                f'(RL: {rec_loss.item(): .4f}) '
+                )
+        loss = rec_loss + self.gamma * (kl_loss - C).abs() + loss_cd
 
         if storer is not None:
             storer['loss'].append(loss.item())
@@ -388,6 +403,41 @@ class BtcvaeLoss(BaseLoss):
 
         return loss
 
+class ChamferLoss(nn.Module):
+
+    def __init__(self):
+        super(ChamferLoss, self).__init__()
+        self.use_cuda = torch.cuda.is_available()
+
+    def forward(self, preds, gts):
+        pcdgt = gts.view(-1,3,128*128)
+        pcdgt = nn.functional.interpolate(pcdgt, size=(2048), mode='nearest')
+        pcd_reco = preds.view(-1,3,128*128)
+        pcd_reco = nn.functional.interpolate(pcd_reco, size=(2048), mode='nearest')
+        P = self.batch_pairwise_dist(pcdgt, pcd_reco)
+        mins, _ = torch.min(P, 1)
+        loss_1 = torch.sum(mins)
+        mins, _ = torch.min(P, 2)
+        loss_2 = torch.sum(mins)
+        return loss_1 + loss_2
+
+    def batch_pairwise_dist(self, x, y):
+        bs, num_points_x, points_dim = x.size()
+        _, num_points_y, _ = y.size()
+        xx = torch.bmm(x, x.transpose(2, 1))
+        yy = torch.bmm(y, y.transpose(2, 1))
+        zz = torch.bmm(x, y.transpose(2, 1))
+        if self.use_cuda:
+            dtype = torch.cuda.LongTensor
+        else:
+            dtype = torch.LongTensor
+        diag_ind_x = torch.arange(0, num_points_x).type(dtype)
+        diag_ind_y = torch.arange(0, num_points_y).type(dtype)
+        rx = xx[:, diag_ind_x, diag_ind_x].unsqueeze(1).expand_as(
+            zz.transpose(2, 1))
+        ry = yy[:, diag_ind_y, diag_ind_y].unsqueeze(1).expand_as(zz)
+        P = rx.transpose(2, 1) + ry - 2 * zz
+        return P
 
 def _reconstruction_loss(data, recon_data, distribution="bernoulli", storer=None):
     """
