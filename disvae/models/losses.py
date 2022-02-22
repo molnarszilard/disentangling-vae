@@ -393,7 +393,7 @@ class BtcvaeLoss(BaseLoss):
         # total loss
         loss = rec_loss + (self.alpha * mi_loss +
                            self.beta * tc_loss +
-                           anneal_reg * self.gamma * dw_kl_loss)
+                           anneal_reg * self.gamma * dw_kl_loss) + loss_cd
         print(f'(CD: {loss_cd.item(): .4f}) '
                 f'(MIL: {mi_loss.item(): .4f}) '
                 f'(RL: {rec_loss.item(): .4f}) '

@@ -15,11 +15,11 @@ class DatasetLoader(data.Dataset):
         self.root = Path(root)
 
         if train:
-            self.depth_input_paths = [root+'ModelNet10_gim_64/train_2cat/'+d for d in os.listdir(root+'ModelNet10_gim_64/train_2cat/')]
+            self.depth_input_paths = [root+'ModelNet10_gim_64/chair/train/'+d for d in os.listdir(root+'ModelNet10_gim_64/chair/train/')]
             # Randomly choose 50k images without replacement
             # self.rgb_paths = np.random.choice(self.rgb_paths, 4000, False)
         else:
-            self.depth_input_paths = [root+'ModelNet10_gim_64/test_2cat/'+d for d in os.listdir(root+'ModelNet10_gim_64/test_2cat/')]
+            self.depth_input_paths = [root+'ModelNet10_gim_64/chair/test/'+d for d in os.listdir(root+'ModelNet10_gim_64/chair/test/')]
             # self.rgb_paths = np.random.choice(self.rgb_paths, 1000, False)
         
         self.length = len(self.depth_input_paths)
