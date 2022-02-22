@@ -143,8 +143,6 @@ class BetaHLoss(BaseLoss):
                                         storer=storer,
                                         distribution=self.rec_dist)
         cd_loss = ChamferLoss()
-        # print(data.shape)
-        # print(recon_data.shape)
         loss_cd = torch.sum(cd_loss(data,recon_data))
         kl_loss = _kl_normal_loss(*latent_dist, storer)
         anneal_reg = (linear_annealing(0, 1, self.n_train_steps, self.steps_anneal)
@@ -199,8 +197,6 @@ class BetaBLoss(BaseLoss):
                                         distribution=self.rec_dist)
         kl_loss = _kl_normal_loss(*latent_dist, storer)
         cd_loss = ChamferLoss()
-        # print(data.shape)
-        # print(recon_data.shape)
         loss_cd = torch.sum(cd_loss(data,recon_data))
 
         C = (linear_annealing(self.C_init, self.C_fin, self.n_train_steps, self.steps_anneal)
@@ -272,7 +268,8 @@ class FactorKLoss(BaseLoss):
                                         distribution=self.rec_dist)
 
         kl_loss = _kl_normal_loss(*latent_dist, storer)
-
+        cd_loss = ChamferLoss()
+        loss_cd = torch.sum(cd_loss(data1,recon_batch))
         d_z = self.discriminator(latent_sample1)
         # We want log(p_true/p_false). If not using logisitc regression but softmax
         # then p_true = exp(logit_true) / Z; p_false = exp(logit_false) / Z
@@ -282,8 +279,12 @@ class FactorKLoss(BaseLoss):
 
         anneal_reg = (linear_annealing(0, 1, self.n_train_steps, self.steps_anneal)
                       if model.training else 1)
-        vae_loss = rec_loss + kl_loss + anneal_reg * self.gamma * tc_loss
-
+        vae_loss = rec_loss + kl_loss + anneal_reg * self.gamma * tc_loss + loss_cd
+        print(f'(CD: {loss_cd.item(): .4f}) '
+                f'(KL: {kl_loss.item(): .4f}) '
+                f'(RL: {rec_loss.item(): .4f}) '
+                f'(TCL: {tc_loss.item(): .4f}) '
+                )
         if storer is not None:
             storer['loss'].append(vae_loss.item())
             storer['tc_loss'].append(tc_loss.item())
@@ -387,12 +388,18 @@ class BtcvaeLoss(BaseLoss):
 
         anneal_reg = (linear_annealing(0, 1, self.n_train_steps, self.steps_anneal)
                       if is_train else 1)
-
+        cd_loss = ChamferLoss()
+        loss_cd = torch.sum(cd_loss(data,recon_batch))
         # total loss
         loss = rec_loss + (self.alpha * mi_loss +
                            self.beta * tc_loss +
                            anneal_reg * self.gamma * dw_kl_loss)
-
+        print(f'(CD: {loss_cd.item(): .4f}) '
+                f'(MIL: {mi_loss.item(): .4f}) '
+                f'(RL: {rec_loss.item(): .4f}) '
+                f'(TCL: {tc_loss.item(): .4f}) '
+                f'(KL: {dw_kl_loss.item(): .4f}) '
+                )
         if storer is not None:
             storer['loss'].append(loss.item())
             storer['mi_loss'].append(mi_loss.item())
@@ -410,9 +417,9 @@ class ChamferLoss(nn.Module):
         self.use_cuda = torch.cuda.is_available()
 
     def forward(self, preds, gts):
-        pcdgt = gts.view(-1,3,128*128)
+        pcdgt = gts.view(-1,3,64*64)
         pcdgt = nn.functional.interpolate(pcdgt, size=(2048), mode='nearest')
-        pcd_reco = preds.view(-1,3,128*128)
+        pcd_reco = preds.view(-1,3,64*64)
         pcd_reco = nn.functional.interpolate(pcd_reco, size=(2048), mode='nearest')
         P = self.batch_pairwise_dist(pcdgt, pcd_reco)
         mins, _ = torch.min(P, 1)

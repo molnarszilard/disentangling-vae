@@ -126,6 +126,7 @@ class Trainer():
         kwargs = dict(desc="Epoch {}".format(epoch + 1), leave=False,
                       disable=not self.is_progress_bar)
         with trange(len(data_loader), **kwargs) as t:
+            # for _, (data, _) in enumerate(data_loader):
             for data in data_loader:
 
                 iter_loss = self._train_iteration(data, storer)
@@ -159,7 +160,8 @@ class Trainer():
         storer: dict
             Dictionary in which to store important variables for vizualisation.
         """
-        batch_size, channel, height, width = data.size()
+        # batch_size, channel, height, width = data.size()
+        # print(data[0].shape)
         data = data.to(self.device)
 
         try:

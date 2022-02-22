@@ -44,7 +44,7 @@ def get_dataset(dataset):
 def get_img_size(dataset):
     """Return the correct image size."""
     if dataset in GIM_DATASETS:
-        return (3,128,128)
+        return (3,64,64)
     else:
         return get_dataset(dataset).img_size
 
