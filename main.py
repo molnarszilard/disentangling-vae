@@ -3,14 +3,19 @@ import logging
 import sys
 import os
 from configparser import ConfigParser
+from ray import tune
+from ray.tune import CLIReporter
+from ray.tune.schedulers import ASHAScheduler
 
-from torch import optim
+from torch import optim,nn
+import torch
+from torch.utils.data import Dataset, DataLoader
 
 from disvae import init_specific_model, Trainer, Evaluator
 from disvae.utils.modelIO import save_model, load_model, load_metadata
 from disvae.models.losses import LOSSES, RECON_DIST, get_loss_f
 from disvae.models.vae import MODELS
-from utils.datasets import get_dataloaders, get_img_size, DATASETS
+from utils.datasets import get_dataloaders, get_img_size, DATASETS, get_train_dataloaders, get_test_dataloaders
 from utils.helpers import (create_safe_directory, get_device, set_seed, get_n_param,
                            get_config_section, update_namespace_, FormatterNoDuplicate)
 from utils.visualize import GifTraversalsTraining
@@ -60,7 +65,9 @@ def parse_arguments(args_to_parse):
                           type=int, default=default_config['checkpoint_every'],
                           help='Save a checkpoint of the trained model every n epoch.')
     training.add_argument('-d', '--dataset', help="Path to training data.",
-                          default=default_config['dataset'], choices=DATASETS)
+                          default=default_config['dataset'])
+    training.add_argument('--category', help="Which category you would like to use? (all - leave it empty, chair, table, bathtub, etc).",
+                          default=default_config['category'])
     training.add_argument('-x', '--experiment',
                           default=default_config['experiment'], choices=EXPERIMENTS,
                           help='Predefined experiments to run. If not `custom` this will overwrite some other arguments.')
@@ -180,7 +187,7 @@ def main(args):
     logger.addHandler(stream)
 
     set_seed(args.seed)
-    device = get_device(is_gpu=not args.no_cuda)
+    # device = get_device(is_gpu=not args.no_cuda)
     exp_dir = os.path.join(RES_DIR, args.name)
     logger.info("Root directory for saving and loading experiments: {}".format(exp_dir))
 
@@ -194,21 +201,24 @@ def main(args):
             args.epochs *= 2
 
         # PREPARES DATA
-        train_loader = get_dataloaders(args.dataset,
-                                       batch_size=args.batch_size,
-                                       logger=logger)
+
+        train_loader = get_train_dataloaders(args.dataset, batch_size=args.batch_size)
+        
         logger.info("Train {} with {} samples".format(args.dataset, len(train_loader)))
 
         # PREPARES MODEL
-        args.img_size = get_img_size(args.dataset)  # stores for metadata #get_img_size(args.dataset)
+        args.img_size = (3,64,64)  # stores for metadata #get_img_size(args.dataset)
         model = init_specific_model(args.model_type, args.img_size, args.latent_dim)
         logger.info('Num parameters in model: {}'.format(get_n_param(model)))
 
         # TRAINS
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
-
-        model = model.to(device)  # make sure trainer and viz on same device
-        gif_visualizer = GifTraversalsTraining(model, args.dataset, exp_dir)
+        device = "cpu"
+        if torch.cuda.is_available() and not args.no_cuda:
+            device = "cuda:0"
+            # if torch.cuda.device_count() > 1:
+            #     model = nn.DataParallel(model)
+        model.to(device)
         loss_f = get_loss_f(args.loss,
                             n_data=len(train_loader),
                             device=device,
@@ -217,8 +227,7 @@ def main(args):
                           device=device,
                           logger=logger,
                           save_dir=exp_dir,
-                          is_progress_bar=not args.no_progress_bar,
-                          gif_visualizer=None)
+                          is_progress_bar=not args.no_progress_bar)
         trainer(train_loader,
                 epochs=args.epochs,
                 checkpoint_every=args.checkpoint_every,)
@@ -230,13 +239,9 @@ def main(args):
         print("Evaluation")
         model = load_model(exp_dir, is_gpu=not args.no_cuda)
         metadata = load_metadata(exp_dir)
-        # TO-DO: currently uses train datatset
-        test_loader = get_dataloaders(metadata["dataset"],
-                                      batch_size=args.eval_batchsize,
-                                      shuffle=False,
-                                      logger=logger)
+        test_loader = get_test_dataloaders(args.dataset, batch_size=args.eval_batchsize)
         loss_f = get_loss_f(args.loss,
-                            n_data=len(test_loader.dataset),
+                            n_data=len(test_loader),
                             device=device,
                             **vars(args))
         evaluator = Evaluator(model, loss_f,

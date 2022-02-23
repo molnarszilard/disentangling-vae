@@ -35,7 +35,6 @@ def save_model(model, directory, metadata=None, filename=MODEL_FILENAME):
                         model_type=model.model_type)
 
     save_metadata(metadata, directory)
-
     path_to_model = os.path.join(directory, filename)
     torch.save(model.state_dict(), path_to_model)
 

@@ -10,6 +10,7 @@ from skimage.io import imread
 from PIL import Image
 from tqdm import tqdm
 import numpy as np
+from utils.datasetloader import DatasetLoader
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -65,33 +66,22 @@ def get_background(dataset):
     return get_dataset(dataset).background_color
 
 
-def get_dataloaders(dataset, root=None, shuffle=True, pin_memory=True,
-                    batch_size=128, logger=logging.getLogger(__name__), **kwargs):
-    """A generic data loader
+def get_dataloaders(dataset,batch_size=128,eval_batchsize=10):
+    train_set = DatasetLoader(root=dataset,train=True)
+    train_loader = DataLoader(dataset=train_set, batch_size=batch_size)
+    test_set = DatasetLoader(root=dataset,train=False)
+    test_loader = DataLoader(dataset=test_set, batch_size=eval_batchsize,shuffle=False)
+    return train_loader, test_loader
 
-    Parameters
-    ----------
-    dataset : {"mnist", "fashion", "dsprites", "celeba", "chairs"}
-        Name of the dataset to load
+def get_train_dataloaders(dataset,batch_size=128):
+    train_set = DatasetLoader(root=dataset,train=True)
+    train_loader = DataLoader(dataset=train_set, batch_size=batch_size)
+    return train_loader
 
-    root : str
-        Path to the dataset root. If `None` uses the default one.
-
-    kwargs :
-        Additional arguments to `DataLoader`. Default values are modified.
-    """
-    dataset = dataset.lower()
-    if dataset == 'modelnetgim':
-        return train_dataloader(batch_size)
-    else:
-        pin_memory = pin_memory and torch.cuda.is_available  # only pin if GPU available
-        Dataset = get_dataset(dataset)
-        dataset = Dataset(logger=logger) if root is None else Dataset(root=root, logger=logger)
-        return DataLoader(dataset,
-                      batch_size=batch_size,
-                      shuffle=shuffle,
-                      pin_memory=pin_memory,
-                      **kwargs)
+def get_test_dataloaders(dataset,batch_size=10):
+    test_set = DatasetLoader(root=dataset,train=False)
+    test_loader = DataLoader(dataset=test_set, batch_size=batch_size,shuffle=False)
+    return test_loader
 
 
 class DisentangledDataset(Dataset, abc.ABC):

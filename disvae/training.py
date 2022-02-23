@@ -49,7 +49,6 @@ class Trainer():
                  device=torch.device("cpu"),
                  logger=logging.getLogger(__name__),
                  save_dir="results",
-                 gif_visualizer=None,
                  is_progress_bar=True):
 
         self.device = device
@@ -60,7 +59,6 @@ class Trainer():
         self.is_progress_bar = is_progress_bar
         self.logger = logger
         self.losses_logger = LossesLogger(os.path.join(self.save_dir, TRAIN_LOSSES_LOGFILE))
-        self.gif_visualizer = gif_visualizer
         self.logger.info("Training Device: {}".format(self.device))
 
     def __call__(self, data_loader,
@@ -88,15 +86,8 @@ class Trainer():
                                                                                mean_epoch_loss))
             self.losses_logger.log(epoch, storer)
 
-            if self.gif_visualizer is not None:
-                self.gif_visualizer()
-
             if epoch % checkpoint_every == 0:
-                save_model(self.model, self.save_dir,
-                           filename="model-{}.pt".format(epoch))
-
-        if self.gif_visualizer is not None:
-            self.gif_visualizer.save_reset()
+                save_model(self.model, self.save_dir,filename="model-{}.pt".format(epoch))
 
         self.model.eval()
 
@@ -127,7 +118,7 @@ class Trainer():
                       disable=not self.is_progress_bar)
         with trange(len(data_loader), **kwargs) as t:
             # for _, (data, _) in enumerate(data_loader):
-            for data in data_loader:
+            for _, data in enumerate(data_loader):
 
                 iter_loss = self._train_iteration(data, storer)
                 epoch_loss += iter_loss
@@ -137,16 +128,6 @@ class Trainer():
 
         mean_epoch_loss = epoch_loss / len(data_loader)
         return mean_epoch_loss
-
-    def save_latent_images(self,images):
-        save_path = "latent_samples/"
-        for i in range(10):
-            image = images[i].detach().cpu().numpy().astype(np.uint8)
-            while len(image.shape)>3:
-                image=image.squeeze(axis=0)
-            image = np.moveaxis(image,0,-1)
-            path = save_path +"gim_reco_"+str(i)+".png"        
-            cv2.imwrite(path,image)
 
     def _train_iteration(self, data, storer):
         """
@@ -166,7 +147,6 @@ class Trainer():
 
         try:
             recon_batch, latent_dist, latent_sample = self.model(data)
-            self.save_latent_images(recon_batch*255)
             loss = self.loss_f(data, recon_batch, latent_dist, self.model.training,
                                storer, latent_sample=latent_sample)
             self.optimizer.zero_grad()

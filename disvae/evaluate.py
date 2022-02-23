@@ -96,17 +96,14 @@ class Evaluator:
         return metric, losses
 
     def save_latent_images(self,images):
+        images=images*255
         save_path = "latent_samples/"
-        for i in range(10):
-            image = images[i*10].detach().cpu().numpy().astype(np.uint8)
+        for i in range(len(images)):
+            image = images[i].detach().cpu().numpy().astype(np.uint8)
             while len(image.shape)>3:
                 image=image.squeeze(axis=0)
             image = np.moveaxis(image,0,-1)
-            # print(image.shape)
-            # print(image.dtype)
-            # image=image.detach().cpu().numpy().astype(np.uint16)
             path = save_path +"gim_reco_"+str(i)+".png"        
-            # save_image(image, path)
             cv2.imwrite(path,image)
 
     def compute_losses(self, dataloader):
@@ -122,7 +119,7 @@ class Evaluator:
 
             try:
                 recon_batch, latent_dist, latent_sample = self.model(data)
-                # self.save_latent_images(recon_batch)
+                self.save_latent_images(recon_batch)
                 _ = self.loss_f(data, recon_batch, latent_dist, self.model.training,
                                 storer, latent_sample=latent_sample)
             except ValueError:

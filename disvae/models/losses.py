@@ -418,9 +418,9 @@ class ChamferLoss(nn.Module):
 
     def forward(self, preds, gts):
         pcdgt = gts.view(-1,3,64*64)
-        pcdgt = nn.functional.interpolate(pcdgt, size=(2048), mode='nearest')
+        # pcdgt = nn.functional.interpolate(pcdgt, size=(2048), mode='nearest')
         pcd_reco = preds.view(-1,3,64*64)
-        pcd_reco = nn.functional.interpolate(pcd_reco, size=(2048), mode='nearest')
+        # pcd_reco = nn.functional.interpolate(pcd_reco, size=(2048), mode='nearest')
         P = self.batch_pairwise_dist(pcdgt, pcd_reco)
         mins, _ = torch.min(P, 1)
         loss_1 = torch.sum(mins)
