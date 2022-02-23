@@ -3,24 +3,30 @@ import logging
 import sys
 import os
 from configparser import ConfigParser
+from timeit import default_timer
+from tqdm import trange
+from collections import defaultdict
+import numpy as np
+from functools import partial
 from ray import tune
 from ray.tune import CLIReporter
 from ray.tune.schedulers import ASHAScheduler
-
+import logging
 from torch import optim,nn
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
 
 from disvae import init_specific_model, Trainer, Evaluator
 from disvae.utils.modelIO import save_model, load_model, load_metadata
 from disvae.models.losses import LOSSES, RECON_DIST, get_loss_f
 from disvae.models.vae import MODELS
 from utils.datasets import get_dataloaders, get_img_size, DATASETS, get_train_dataloaders, get_test_dataloaders
+from utils.datasets import get_train_datasets, get_test_datasets, get_datasets
 from utils.helpers import (create_safe_directory, get_device, set_seed, get_n_param,
                            get_config_section, update_namespace_, FormatterNoDuplicate)
 from utils.visualize import GifTraversalsTraining
 
-
+TRAIN_LOSSES_LOGFILE = "train_losses.log"
 CONFIG_FILE = "hyperparam.ini"
 RES_DIR = "results"
 LOG_LEVELS = list(logging._levelToName.values())
@@ -66,8 +72,6 @@ def parse_arguments(args_to_parse):
                           help='Save a checkpoint of the trained model every n epoch.')
     training.add_argument('-d', '--dataset', help="Path to training data.",
                           default=default_config['dataset'])
-    training.add_argument('--category', help="Which category you would like to use? (all - leave it empty, chair, table, bathtub, etc).",
-                          default=default_config['category'])
     training.add_argument('-x', '--experiment',
                           default=default_config['experiment'], choices=EXPERIMENTS,
                           help='Predefined experiments to run. If not `custom` this will overwrite some other arguments.')
@@ -79,6 +83,10 @@ def parse_arguments(args_to_parse):
                           help='Batch size for training.')
     training.add_argument('--lr', type=float, default=default_config['lr'],
                           help='Learning rate.')
+    training.add_argument('--image_size', type=int, default=default_config['image_size'],
+                          help='the size of the image, it is squared, so it would be 32,64,128.')
+    training.add_argument('--start_checkpoint', type=int, default=default_config['s_chk'],
+                          help='Which epoch would you like to choose. (-1) - start a new model, 0<= - reload another checkpoint')
 
     # Model Options
     model = parser.add_argument_group('Model specfic options')
@@ -168,6 +176,144 @@ def parse_arguments(args_to_parse):
 
     return args
 
+def train(config, checkpoint_dir=None, args=None):
+    # if args.loss == "factor":
+    #         logger.info("FactorVae needs 2 batches per iteration. To replicate this behavior while being consistent, we double the batch size and the the number of epochs.")
+    #         args.batch_size *= config['batch_size']
+    #         args.epochs *= 2
+    model = init_specific_model(args.model_type, args.img_size, args.latent_dim)
+    device = "cpu"
+    if torch.cuda.is_available() and not args.no_cuda:
+        device = "cuda:0"
+        # if torch.cuda.device_count() > 1:
+        #     model = nn.DataParallel(model)
+    # PREPARES DATA
+    train_set= get_train_datasets(args.dataset)
+    test_abs = int(len(train_set) * 0.8)
+    train_subset, val_subset = random_split(
+    train_set, [test_abs, len(train_set) - test_abs])
+    train_loader = DataLoader(
+        train_subset,
+        batch_size=int(config['batch_size']),
+        shuffle=True,
+        num_workers=8)
+    val_loader = DataLoader(
+        val_subset,
+        batch_size=int(config['batch_size']),
+        shuffle=True,
+        num_workers=8)
+    # logger.info("Train {} with {} samples".format(args.dataset, len(train_loader)))
+
+    # PREPARES MODEL 
+    model.to(device)     
+    if args.start_checkpoint > -1:
+        model_state, optimizer_state = torch.load(
+            os.path.join(checkpoint_dir, "checkpoint"))
+        model.load_state_dict(model_state)
+        optimizer.load_state_dict(optimizer_state)
+        
+    # logger.info('Num parameters in model: {}'.format(get_n_param(model)))
+
+    # TRAINS
+    optimizer = optim.Adam(model.parameters(), lr=config['lr'])
+    loss_f = get_loss_f(args.loss,config=config,
+                        n_data=len(train_loader),
+                        device=device,
+                        **vars(args))
+    start = default_timer()
+    model.train()
+    for epoch in range(args.epochs):
+        storer = defaultdict(list)
+        epoch_loss = 0.
+        kwargs = dict(desc="Epoch {}".format(epoch + 1), leave=False,
+                    disable=args.no_progress_bar)
+        with trange(len(train_loader), **kwargs) as t:
+            # for _, (data, _) in enumerate(data_loader):
+            for _, data in enumerate(train_loader):
+                data = data.to(device)
+                try:
+                    recon_batch, latent_dist, latent_sample = model(data)
+                    loss = loss_f(data, recon_batch, latent_dist, model.training,
+                                    storer, latent_sample=latent_sample)
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                except ValueError:
+                    # for losses that use multiple optimizers (e.g. Factor)
+                    loss = loss_f.call_optimize(data, model, optimizer, storer)
+
+                iter_loss = loss.item()
+                epoch_loss += iter_loss
+
+                t.set_postfix(loss=iter_loss)
+                t.update()
+
+        mean_epoch_loss = epoch_loss / len(train_loader)
+        # mean_epoch_loss = self._train_epoch(data_loader, storer, epoch)
+        # logger.info('Epoch: {} Average loss per image: {:.2f}'.format(epoch + 1,mean_epoch_loss))
+        # losses_logger.log(epoch, storer)
+
+        val_loss = 0.0
+        val_steps = 0
+        total = 0
+        correct = 0
+        for i, data in enumerate(val_loader, 0):
+            with torch.no_grad():
+                data = data.to(device)
+                try:
+                    recon_batch, latent_dist, latent_sample = model(data)
+                    loss = loss_f(data, recon_batch, latent_dist, model.training,
+                                    storer, latent_sample=latent_sample)
+                    total += data.size(0)
+                    if loss <10:
+                        correct 
+
+                    val_loss += loss.cpu().numpy()
+                    val_steps += 1
+                except ValueError:
+                    # for losses that use multiple optimizers (e.g. Factor)
+                    loss = loss_f.call_optimize(data, model, optimizer, storer)
+
+        if epoch % args.checkpoint_every == 0:
+            # save_model(model, exp_dir,filename="model-{}.pt".format(epoch), epoch=epoch, tune=tune)
+            with tune.checkpoint_dir(epoch) as directory:
+                path_to_model = os.path.join(directory, "checkpoint")
+                torch.save(model.state_dict(), path_to_model)
+        tune.report(loss=(val_loss / val_steps), accuracy = val_loss/total)
+
+        model.eval()
+
+        delta_time = (default_timer() - start) / 60
+        # logger.info('Finished training after {:.1f} min.'.format(delta_time))
+
+    # SAVE MODEL AND EXPERIMENT INFORMATION
+    # save_model(model, exp_dir, metadata=vars(args),tune=tune)
+    # with tune.checkpoint_dir(epoch) as directory:
+    #     path_to_model = os.path.join(directory, "model.pt")
+    #     torch.save(model.state_dict(), path_to_model)
+
+def test(args, model,device,logger=None, config=None):
+    print("Evaluation")
+    # model = init_specific_model(args.model_type, args.img_size, args.latent_dim).to(device)
+    # model.to(device)
+    # if args.start_checkpoint > -1:
+    #     model_state, optimizer_state = torch.load(
+    #         os.path.join(checkpoint_dir, "checkpoint"))
+    #     model.load_state_dict(model_state)
+    test_set = get_test_datasets(args.dataset)
+    test_loader = DataLoader(dataset=test_set, batch_size=args.eval_batchsize,shuffle=False)
+    loss_f = get_loss_f(args.loss,config=config,
+                        n_data=len(test_loader),
+                        device=device,
+                        **vars(args))
+    evaluator = Evaluator(model, loss_f,
+                            device=device,
+                            logger=logger,
+                            is_progress_bar=not args.no_progress_bar)
+
+    metric,losses = evaluator(test_loader, is_metrics=args.is_metrics, is_losses=not args.no_test)
+    return losses
 
 def main(args):
     """Main train and evaluation function.
@@ -190,67 +336,68 @@ def main(args):
     # device = get_device(is_gpu=not args.no_cuda)
     exp_dir = os.path.join(RES_DIR, args.name)
     logger.info("Root directory for saving and loading experiments: {}".format(exp_dir))
+    device = "cpu"
+    if torch.cuda.is_available() and not args.no_cuda:
+        device = "cuda:0"
+        # if torch.cuda.device_count() > 1:
+        #     model = nn.DataParallel(model)
+    config = {
+        'batch_size': tune.choice([2, 4, 8, 16,128]),
+        'betaB_finC': tune.sample_from(lambda _: np.random.randint(1, 100)),
+        'betaB_G': tune.choice([50,100,150,1000]),
+        'lr': tune.loguniform(1e-4, 1e-3)
+    }
+    args.img_size = (3,args.image_size,args.image_size)
+    # print(config["batch_size"])
+    # if not args.is_eval_only:
+    create_safe_directory(exp_dir, logger=logger)
+    gpus_per_trial = 2
+    num_samples = 10
+    scheduler = ASHAScheduler(
+        metric="loss",
+        mode="min",
+        max_t=args.epochs,
+        grace_period=1,
+        reduction_factor=2)
+    reporter = CLIReporter(
+        # parameter_columns=["l1", "l2", "lr", "batch_size"],
+        metric_columns=["loss","accuracy", "training_iteration"])
+    result = tune.run(
+        partial(train,checkpoint_dir=exp_dir,args=args),
+        resources_per_trial={"cpu": 8, "gpu": gpus_per_trial},
+        config=config,
+        num_samples=num_samples,
+        scheduler=scheduler,
+        progress_reporter=reporter,
+        # checkpoint_at_end=True
+        )       
 
-    if not args.is_eval_only:
+    # if args.is_metrics or not args.no_test:
+    # test(args, exp_dir, logger)
+    best_trial = result.get_best_trial("loss", "min", "last")
+    print("Best trial config: {}".format(best_trial.config))
+    print("Best trial final validation loss: {}".format(
+        best_trial.last_result["loss"]))
+    print("Best trial final validation accuracy: {}".format(
+        best_trial.last_result["accuracy"]))
 
-        create_safe_directory(exp_dir, logger=logger)
+    best_trained_model = init_specific_model(args.model_type, args.img_size, args.latent_dim)
+    # Net(best_trial.config["l1"], best_trial.config["l2"])
+    device = "cpu"
+    if torch.cuda.is_available():
+        device = "cuda:0"
+        # if gpus_per_trial > 1:
+        #     best_trained_model = nn.DataParallel(best_trained_model)
+    
 
-        if args.loss == "factor":
-            logger.info("FactorVae needs 2 batches per iteration. To replicate this behavior while being consistent, we double the batch size and the the number of epochs.")
-            args.batch_size *= 2
-            args.epochs *= 2
+    best_checkpoint_dir = best_trial.checkpoint.value
+    model_state = torch.load(os.path.join(
+        best_checkpoint_dir, "checkpoint"))
+    best_trained_model.load_state_dict(model_state)
+    best_trained_model.to(device)
 
-        # PREPARES DATA
-
-        train_loader = get_train_dataloaders(args.dataset, batch_size=args.batch_size)
-        
-        logger.info("Train {} with {} samples".format(args.dataset, len(train_loader)))
-
-        # PREPARES MODEL
-        args.img_size = (3,64,64)  # stores for metadata #get_img_size(args.dataset)
-        model = init_specific_model(args.model_type, args.img_size, args.latent_dim)
-        logger.info('Num parameters in model: {}'.format(get_n_param(model)))
-
-        # TRAINS
-        optimizer = optim.Adam(model.parameters(), lr=args.lr)
-        device = "cpu"
-        if torch.cuda.is_available() and not args.no_cuda:
-            device = "cuda:0"
-            # if torch.cuda.device_count() > 1:
-            #     model = nn.DataParallel(model)
-        model.to(device)
-        loss_f = get_loss_f(args.loss,
-                            n_data=len(train_loader),
-                            device=device,
-                            **vars(args))
-        trainer = Trainer(model, optimizer, loss_f,
-                          device=device,
-                          logger=logger,
-                          save_dir=exp_dir,
-                          is_progress_bar=not args.no_progress_bar)
-        trainer(train_loader,
-                epochs=args.epochs,
-                checkpoint_every=args.checkpoint_every,)
-
-        # SAVE MODEL AND EXPERIMENT INFORMATION
-        save_model(trainer.model, exp_dir, metadata=vars(args))
-
-    if args.is_metrics or not args.no_test:
-        print("Evaluation")
-        model = load_model(exp_dir, is_gpu=not args.no_cuda)
-        metadata = load_metadata(exp_dir)
-        test_loader = get_test_dataloaders(args.dataset, batch_size=args.eval_batchsize)
-        loss_f = get_loss_f(args.loss,
-                            n_data=len(test_loader),
-                            device=device,
-                            **vars(args))
-        evaluator = Evaluator(model, loss_f,
-                              device=device,
-                              logger=logger,
-                              save_dir=exp_dir,
-                              is_progress_bar=not args.no_progress_bar)
-
-        evaluator(test_loader, is_metrics=args.is_metrics, is_losses=not args.no_test)
+    test_acc = test(args=args,model=best_trained_model,device=device,logger=logger, config=best_trial.config)
+    print("Best trial test set accuracy: {}".format(test_acc))
 
 
 if __name__ == '__main__':

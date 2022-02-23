@@ -62,8 +62,10 @@ class Trainer():
         self.logger.info("Training Device: {}".format(self.device))
 
     def __call__(self, data_loader,
+                 valloader,                
                  epochs=10,
-                 checkpoint_every=10):
+                 checkpoint_every=10,
+                 tune=None):
         """
         Trains the model.
 
@@ -81,13 +83,61 @@ class Trainer():
         self.model.train()
         for epoch in range(epochs):
             storer = defaultdict(list)
-            mean_epoch_loss = self._train_epoch(data_loader, storer, epoch)
+            epoch_loss = 0.
+            kwargs = dict(desc="Epoch {}".format(epoch + 1), leave=False,
+                        disable=not self.is_progress_bar)
+            with trange(len(data_loader), **kwargs) as t:
+                # for _, (data, _) in enumerate(data_loader):
+                for _, data in enumerate(data_loader):
+                    data = data.to(self.device)
+                    try:
+                        recon_batch, latent_dist, latent_sample = self.model(data)
+                        loss = self.loss_f(data, recon_batch, latent_dist, self.model.training,
+                                        storer, latent_sample=latent_sample)
+                        self.optimizer.zero_grad()
+                        loss.backward()
+                        self.optimizer.step()
+
+                    except ValueError:
+                        # for losses that use multiple optimizers (e.g. Factor)
+                        loss = self.loss_f.call_optimize(data, self.model, self.optimizer, storer)
+
+                    iter_loss = loss.item()
+                    epoch_loss += iter_loss
+
+                    t.set_postfix(loss=iter_loss)
+                    t.update()
+
+            mean_epoch_loss = epoch_loss / len(data_loader)
+            # mean_epoch_loss = self._train_epoch(data_loader, storer, epoch)
             self.logger.info('Epoch: {} Average loss per image: {:.2f}'.format(epoch + 1,
                                                                                mean_epoch_loss))
             self.losses_logger.log(epoch, storer)
 
+            val_loss = 0.0
+            val_steps = 0
+            total = 0
+            correct = 0
+            for i, data in enumerate(valloader, 0):
+                with torch.no_grad():
+                    data = data.to(self.device)
+                    try:
+                        recon_batch, latent_dist, latent_sample = self.model(data)
+                        loss = self.loss_f(data, recon_batch, latent_dist, self.model.training,
+                                        storer, latent_sample=latent_sample)
+                        total += data.size(0)
+                        if loss <10:
+                            correct 
+
+                        val_loss += loss.cpu().numpy()
+                        val_steps += 1
+                    except ValueError:
+                        # for losses that use multiple optimizers (e.g. Factor)
+                        loss = self.loss_f.call_optimize(data, self.model, self.optimizer, storer)
+
             if epoch % checkpoint_every == 0:
-                save_model(self.model, self.save_dir,filename="model-{}.pt".format(epoch))
+                save_model(self.model, self.save_dir,filename="model-{}.pt".format(epoch), epoch=epoch, tune=tune)
+            tune.report(loss=(val_loss / val_steps), accuracy=val_loss / total)
 
         self.model.eval()
 

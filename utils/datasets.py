@@ -83,6 +83,19 @@ def get_test_dataloaders(dataset,batch_size=10):
     test_loader = DataLoader(dataset=test_set, batch_size=batch_size,shuffle=False)
     return test_loader
 
+def get_datasets(dataset,batch_size=128,eval_batchsize=10):
+    train_set = DatasetLoader(root=dataset,train=True)
+    test_set = DatasetLoader(root=dataset,train=False)
+    return train_set, test_set
+
+def get_train_datasets(dataset,batch_size=128):
+    train_set = DatasetLoader(root=dataset,train=True)
+    return train_set
+
+def get_test_datasets(dataset,batch_size=10):
+    test_set = DatasetLoader(root=dataset,train=False)
+    return test_set
+
 
 class DisentangledDataset(Dataset, abc.ABC):
     """Base Class for disentangled VAE datasets.

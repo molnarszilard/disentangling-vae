@@ -19,7 +19,7 @@ RECON_DIST = ["bernoulli", "laplace", "gaussian"]
 
 
 # TO-DO: clean n_data and device
-def get_loss_f(loss_name, **kwargs_parse):
+def get_loss_f(loss_name,config=None, **kwargs_parse):
     """Return the correct loss function given the argparse arguments."""
     kwargs_all = dict(rec_dist=kwargs_parse["rec_dist"],
                       steps_anneal=kwargs_parse["reg_anneal"])
@@ -29,8 +29,8 @@ def get_loss_f(loss_name, **kwargs_parse):
         return BetaHLoss(beta=1, **kwargs_all)
     elif loss_name == "betaB":
         return BetaBLoss(C_init=kwargs_parse["betaB_initC"],
-                         C_fin=kwargs_parse["betaB_finC"],
-                         gamma=kwargs_parse["betaB_G"],
+                         C_fin=config['betaB_finC'],
+                         gamma=config['betaB_G'],
                          **kwargs_all)
     elif loss_name == "factor":
         return FactorKLoss(kwargs_parse["device"],
@@ -417,9 +417,10 @@ class ChamferLoss(nn.Module):
         self.use_cuda = torch.cuda.is_available()
 
     def forward(self, preds, gts):
-        pcdgt = gts.view(-1,3,64*64)
+        _,_,h,w = gts.size()
+        pcdgt = gts.view(-1,3,h*w)
         # pcdgt = nn.functional.interpolate(pcdgt, size=(2048), mode='nearest')
-        pcd_reco = preds.view(-1,3,64*64)
+        pcd_reco = preds.view(-1,3,h*w)
         # pcd_reco = nn.functional.interpolate(pcd_reco, size=(2048), mode='nearest')
         P = self.batch_pairwise_dist(pcdgt, pcd_reco)
         mins, _ = torch.min(P, 1)

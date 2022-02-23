@@ -11,7 +11,7 @@ MODEL_FILENAME = "model.pt"
 META_FILENAME = "specs.json"
 
 
-def save_model(model, directory, metadata=None, filename=MODEL_FILENAME):
+def save_model(model, directory, metadata=None, filename=MODEL_FILENAME, epoch =0, tune=None):
     """
     Save a model and corresponding metadata.
 
@@ -35,8 +35,9 @@ def save_model(model, directory, metadata=None, filename=MODEL_FILENAME):
                         model_type=model.model_type)
 
     save_metadata(metadata, directory)
-    path_to_model = os.path.join(directory, filename)
-    torch.save(model.state_dict(), path_to_model)
+    with tune.checkpoint_dir(epoch) as directory:
+        path_to_model = os.path.join(directory, filename)
+        torch.save(model.state_dict(), path_to_model)
 
     model.to(device)  # restore device
 

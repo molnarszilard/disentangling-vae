@@ -114,11 +114,13 @@ class Evaluator:
         data_loader: torch.utils.data.DataLoader
         """
         storer = defaultdict(list)
-        for data in tqdm(dataloader, leave=False, disable=not self.is_progress_bar):
+        # for data in tqdm(dataloader, leave=False, disable=not self.is_progress_bar):
+        for i, data in enumerate(dataloader, 0):
             data = data.to(self.device)
 
             try:
                 recon_batch, latent_dist, latent_sample = self.model(data)
+                print(recon_batch.mean())
                 self.save_latent_images(recon_batch)
                 _ = self.loss_f(data, recon_batch, latent_dist, self.model.training,
                                 storer, latent_sample=latent_sample)
