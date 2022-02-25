@@ -84,14 +84,24 @@ class Evaluator:
 
         if is_losses:
             self.logger.info('Computing losses...')
-            losses = self.compute_losses(data_loader)
-            self.logger.info('Losses: {}'.format(losses))
-            save_metadata(losses, self.save_dir, filename=TEST_LOSSES_FILE)
+            losses,losses_rec,losses_kl,losses_cd = self.compute_losses(data_loader)
+            print(
+                f'(Loss: {losses: .4f}) '
+                f'(CD: {losses_cd: .4f}) '
+                f'(KL: {losses_kl: .4f}) '
+                f'(RL: {losses_rec: .4f}) '
+                )
+            # self.logger.info('Losses: {}'.format(losses),
+            #                 'Losses_rec: {}'.format(losses_rec),
+            #                 'Losses_kl: {}'.format(losses_kl),
+            #                 'Losses_cd: {}'.format(losses_cd)
+            # )
+            # save_metadata(losses, self.save_dir, filename=TEST_LOSSES_FILE)
 
         if is_still_training:
             self.model.train()
 
-        self.logger.info('Finished evaluating after {:.1f} min.'.format((default_timer() - start) / 60))
+        # self.logger.info('Finished evaluating after {:.1f} min.'.format((default_timer() - start) / 60))
 
         return metric, losses
 
@@ -120,16 +130,19 @@ class Evaluator:
 
             try:
                 recon_batch, latent_dist, latent_sample = self.model(data)
-                print(recon_batch.mean())
                 self.save_latent_images(recon_batch)
-                _ = self.loss_f(data, recon_batch, latent_dist, self.model.training,
+                loss,rec_loss, kl_loss, loss_cd = self.loss_f(data, recon_batch, latent_dist, self.model.training,
                                 storer, latent_sample=latent_sample)
+
             except ValueError:
                 # for losses that use multiple optimizers (e.g. Factor)
-                _ = self.loss_f.call_optimize(data, self.model, None, storer)
+                loss,rec_loss, kl_loss, loss_cd = self.loss_f.call_optimize(data, self.model, None, storer)
 
-            losses = {k: sum(v) / len(dataloader) for k, v in storer.items()}
-            return losses
+            # losses = {k: sum(v) / len(dataloader) for k, v in retlosses}
+            # losses_rec = {k: sum(v) / len(dataloader) for k, v in rec_loss}
+            # losses_kl = {k: sum(v) / len(dataloader) for k, v in kl_loss}
+            # losses_cd = {k: sum(v) / len(dataloader) for k, v in loss_cd}
+            return loss/len(dataloader),rec_loss/len(dataloader), kl_loss/len(dataloader), loss_cd/len(dataloader)
 
     def compute_metrics(self, dataloader):
         """Compute all the metrics.

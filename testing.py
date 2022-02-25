@@ -66,8 +66,6 @@ def parse_arguments(args_to_parse):
                          help='Disables CUDA training, even when have one.')
     general.add_argument('-s', '--seed', type=int, default=default_config['seed'],
                          help='Random seed. Can be `None` for stochastic behavior.')
-    general.add_argument('--ray', type=bool, default=default_config['ray'],
-                         help='Do you want to tune your hyperparameters using ray tune?')
 
     # Learning options
     training = parser.add_argument_group('Training specific options')
@@ -219,177 +217,23 @@ def save_reco(data,images, directory, height):
         path = os.path.join(directory, "gim_test_{}_gt.pcd".format(i)) 
         o3d.io.write_point_cloud(path,pcd)
 
-def train(config=None, args=None):
-    # if args.loss == "factor":
-    #         logger.info("FactorVae needs 2 batches per iteration. To replicate this behavior while being consistent, we double the batch size and the the number of epochs.")
-    #         args.batch_size *= config['batch_size']
-    #         args.epochs *= 2
-    model = init_specific_model(args.model_type, args.img_size, args.latent_dim)
-    device = "cpu"
-    if torch.cuda.is_available() and not args.no_cuda:
-        device = "cuda:0"
-        # if torch.cuda.device_count() > 1:
-        #     model = nn.DataParallel(model)
-    # PREPARES DATA
-    bs=args.batch_size
-    train_set= get_train_datasets(args.dataset)
-    test_abs = int(len(train_set) * 0.8)
-    train_subset, val_subset = random_split(
-    train_set, [test_abs, len(train_set) - test_abs])
-    train_loader = DataLoader(
-        train_subset,
-        batch_size=bs,
-        shuffle=True,
-        num_workers=8)
-    val_loader = DataLoader(
-        val_subset,
-        batch_size=bs,
-        shuffle=True,
-        num_workers=8)
-    # logger.info("Train {} with {} samples".format(args.dataset, len(train_loader)))
-
-    # PREPARES MODEL 
-    model.to(device)     
-    # if args.start_checkpoint > -1:
-    #     model_state, optimizer_state = torch.load(
-    #         os.path.join(args.checkpoint_dir, "checkpoint"))
-    #     model.load_state_dict(model_state)
-    #     optimizer.load_state_dict(optimizer_state)
-        
-    # logger.info('Num parameters in model: {}'.format(get_n_param(model)))
-
-    # TRAINS
-    lr = args.lr
-    if config is not None:
-        lr = config['lr']
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-    loss_f = get_loss_f(args.loss,config=config,
-                        n_data=len(train_loader),
-                        device=device,
-                        **vars(args))
-    start = default_timer()
-    
-    for epoch in range(args.epochs):
-        model.train()
-        storer = defaultdict(list)
-        epoch_loss = 0.
-        kwargs = dict(desc="Epoch {}".format(epoch), leave=False,
-                    disable=args.no_progress_bar)
-        with trange(len(train_loader), **kwargs) as t:
-            # for _, (data, _) in enumerate(data_loader):
-            for _, data in enumerate(train_loader):
-                data = data.to(device)
-                try:
-                    recon_batch, latent_dist, latent_sample = model(data)
-                    loss,rec_loss, kl_loss, loss_cd = loss_f(data, recon_batch, latent_dist, model.training,
-                                    storer, latent_sample=latent_sample)
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-
-                except ValueError:
-                    # for losses that use multiple optimizers (e.g. Factor)
-                    loss,rec_loss, kl_loss, loss_cd = loss_f.call_optimize(data, model, optimizer, storer)
-
-                iter_loss = loss.item()
-                epoch_loss += iter_loss
-
-                t.set_postfix(loss=iter_loss,rec_loss=rec_loss.item(),kl_loss=kl_loss.item(),loss_cd=loss_cd.item())
-                t.update()
-
-        mean_epoch_loss = epoch_loss / len(train_loader)
-        # mean_epoch_loss = self._train_epoch(data_loader, storer, epoch)
-        # logger.info('Epoch: {} Average loss per image: {:.2f}'.format(epoch + 1,mean_epoch_loss))
-        # losses_logger.log(epoch, storer)
-        model.eval()
-        val_loss = 0.0
-        val_loss_rec = 0.0
-        val_loss_kl = 0.0
-        val_loss_cd = 0.0
-        val_steps = 0
-        total = 0
-        correct = 0
-        for i, data in enumerate(val_loader, 0):
-            with torch.no_grad():
-                data = data.to(device)
-                try:
-                    recon_batch, latent_dist, latent_sample = model(data)
-                    if args.ray:
-                        with tune.checkpoint_dir(epoch) as directory:
-                            save_reco(data,recon_batch,directory, args.image_size)
-                    else:
-                        save_reco(data,recon_batch,args.checkpoint_dir, args.image_size)
-                    loss,rec_loss, kl_loss, loss_cd = loss_f(data, recon_batch, latent_dist, not model.training,
-                                    storer, latent_sample=latent_sample)
-                    total += data.size(0)
-                    if loss <10:
-                        correct 
-
-                    val_loss += loss.cpu().numpy()
-                    val_loss_rec += rec_loss.cpu().numpy()
-                    val_loss_kl += kl_loss.cpu().numpy()
-                    val_loss_cd += loss_cd.cpu().numpy()
-                    val_steps += 1
-                except ValueError:
-                    # for losses that use multiple optimizers (e.g. Factor)
-                    loss,rec_loss, kl_loss, loss_cd = loss_f.call_optimize(data, model, optimizer, storer)
-        
-        if epoch % args.checkpoint_every == 0 or epoch == args.epochs-1:
-            # save_model(model, exp_dir,filename="model-{}.pt".format(epoch), epoch=epoch, tune=tune)
-            if args.ray:
-                with tune.checkpoint_dir(epoch) as directory:
-                    path_to_model = os.path.join(directory, "checkpoint")
-                    torch.save(model.state_dict(), path_to_model)
-            else:
-                path_to_model = os.path.join(args.checkpoint_dir, "checkpoint")
-                torch.save(model.state_dict(), path_to_model)
-        if args.ray:
-            tune.report(loss=(val_loss / val_steps), rec_loss = (val_loss_rec/val_steps), kl_loss = (val_loss_kl/val_steps), loss_cd = (val_loss_cd/val_steps))
-        else:
-            print("Losses in epoch {} are:".format(epoch))
-            print(  f'(LOSS: {val_loss/ val_steps: .4f}) '
-                    f'(CD: {val_loss_cd/ val_steps: .4f}) '
-                    f'(KL: {val_loss_kl/ val_steps: .4f}) '
-                    f'(RL: {val_loss_rec/ val_steps: .4f}) '
-                    )
-    delta_time = (default_timer() - start) / 60
-    test(args,model,device,logger=None,config=None)
-
 def test(args, model,device,logger=None, config=None):
     print("Evaluation")
     test_set = get_test_datasets(args.dataset)
     test_loader = DataLoader(dataset=test_set, batch_size=args.eval_batchsize,shuffle=False)
-    loss_f = get_loss_f(args.loss,config=config,
-                        n_data=len(test_loader),
-                        device=device,
-                        **vars(args))
-    # evaluator = Evaluator(model, loss_f,
-    #                         device=device,
-    #                         logger=logger,
-    #                         is_progress_bar=not args.no_progress_bar)
-
-    # metric,losses = evaluator(test_loader, is_metrics=args.is_metrics, is_losses=not args.no_test)
-
-
     nr = 0
     start = default_timer()
     model.eval()
-    cd_losses = 0.0
     for i, data in enumerate(test_loader, 0):
         nr +=1
         data = data.to(device)
         recon_batch, latent_dist, latent_sample = model(data)
-        loss,rec_loss, kl_loss, loss_cd = loss_f(data, recon_batch, latent_dist, not model.training,
-                                storer=None, latent_sample=latent_sample)
-        cd_losses += loss_cd
         if i==0:
             save_reco(data,recon_batch, args.checkpoint_dir, args.image_size)
     delta_time = (default_timer() - start)
-    print('Finished testing after {:.1f} sec.'.format(delta_time))
+    print('Finished training after {:.1f} sec.'.format(delta_time))
     print('Processed {} number of images.'.format(nr))
     print('Time per image is: {} sec.'.format(delta_time/nr))
-    print('CD loss per image: {}.'.format(cd_losses/nr))
-    return cd_losses
 
 def main(args):
     """Main train and evaluation function.
@@ -410,7 +254,7 @@ def main(args):
 
     set_seed(args.seed)
     # device = get_device(is_gpu=not args.no_cuda)
-    exp_dir = os.path.join(args.checkpoint_dir, args.name)
+    exp_dir = os.path.join(RES_DIR, args.name)
     logger.info("Root directory for saving and loading experiments: {}".format(exp_dir))
     device = "cpu"
     if torch.cuda.is_available() and not args.no_cuda:
@@ -418,60 +262,21 @@ def main(args):
         # if torch.cuda.device_count() > 1:
         #     model = nn.DataParallel(model)
     args.img_size = (3,args.image_size,args.image_size)
-    create_safe_directory(exp_dir, logger=logger)
-    if args.ray:
-        config = {
-            # 'batch_size': tune.choice([2, 4, 8, 16,128]),
-            'betaB_finC': tune.grid_search([50,100,150]),
-            # 'betaB_G': tune.choice([50,100,150,1000]),
-            # 'lr': tune.loguniform(1e-4, 1e-3)
-            'lr': tune.grid_search([1e-4])
-        }
-        gpus_per_trial = 2
-        num_samples = 1
-        scheduler = ASHAScheduler(
-            metric="loss_cd",
-            mode="min",
-            max_t=args.epochs,
-            grace_period=1,
-            reduction_factor=2)
-        reporter = CLIReporter(
-            # parameter_columns=["l1", "l2", "lr", "batch_size"],
-            metric_columns=["loss","rec_loss", "kl_loss","loss_cd","training_iteration"])
-        result = tune.run(
-            partial(train,args=args),
-            name=args.name,
-            resources_per_trial={"cpu": 8, "gpu": gpus_per_trial},
-            config=config,
-            num_samples=num_samples,
-            scheduler=None,
-            progress_reporter=reporter,
-            # checkpoint_at_end=True
-            )       
-        best_trial = result.get_best_trial("loss_cd", "min", "last")
-        print("Best trial config: {}".format(best_trial.config))
-        print("Best trial final validation loss: {}".format(
-            best_trial.last_result["loss"]))
-        print("Best trial final validation reco error: {}".format(
-            best_trial.last_result["rec_loss"]))
-        print("Best trial final validation kl divergence: {}".format(
-            best_trial.last_result["kl_loss"]))
-        print("Best trial final validation cd: {}".format(
-            best_trial.last_result["loss_cd"]))
 
-        best_trained_model = init_specific_model(args.model_type, args.img_size, args.latent_dim)      
-        best_checkpoint_dir = best_trial.checkpoint.value
-        args.checkpoint_dir = best_checkpoint_dir
-        model_state = torch.load(os.path.join(
-            best_checkpoint_dir, "checkpoint"))
-        best_trained_model.load_state_dict(model_state)
-        best_trained_model.to(device)
+    model = init_specific_model(args.model_type, args.img_size, args.latent_dim)
+    # Net(best_trial.config["l1"], best_trial.config["l2"])
+    device = "cpu"
+    if torch.cuda.is_available():
+        device = "cuda:0"
+        # if gpus_per_trial > 1:
+        #     best_trained_model = nn.DataParallel(best_trained_model)
+    
+    model_state = torch.load(os.path.join(
+        args.checkpoint_dir, "checkpoint"))
+    model.load_state_dict(model_state)
+    model.to(device)
 
-        test_acc = test(args=args,model=best_trained_model,device=device,logger=logger, config=best_trial.config)
-        print("Best trial test set accuracy: {}".format(test_acc))
-    else:
-        args.checkpoint_dir=exp_dir
-        train(None,args=args)
+    test(args=args,model=model,device=device,logger=logger)
 
 
 if __name__ == '__main__':

@@ -13,7 +13,7 @@ class DatasetLoader(data.Dataset):
         if train:
             self.depth_input_paths = [root+'/train/'+d for d in os.listdir(root+'/train/')]
         else:
-            self.depth_input_paths = [root+'/test/'+d for d in os.listdir(root+'/test/')]
+            self.depth_input_paths = [root+'/chair/test/'+d for d in os.listdir(root+'/chair/test/')]
         
         self.length = len(self.depth_input_paths)
             

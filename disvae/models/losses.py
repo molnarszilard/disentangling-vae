@@ -14,7 +14,7 @@ from disvae.utils.math import (log_density_gaussian, log_importance_weight_matri
                                matrix_log_density_gaussian)
 
 
-LOSSES = ["VAE", "betaH", "betaB", "factor", "btcvae"]
+LOSSES = ["VAE", "betaH", "betaB", "factor", "btcvae", "betaB2"]
 RECON_DIST = ["bernoulli", "laplace", "gaussian"]
 
 
@@ -28,9 +28,22 @@ def get_loss_f(loss_name,config=None, **kwargs_parse):
     elif loss_name == "VAE":
         return BetaHLoss(beta=1, **kwargs_all)
     elif loss_name == "betaB":
+        if config is None:
+            C_fin=kwargs_parse['betaB_finC']
+        else:
+            C_fin=config['betaB_finC']                
         return BetaBLoss(C_init=kwargs_parse["betaB_initC"],
-                         C_fin=config['betaB_finC'],
-                         gamma=config['betaB_G'],
+                             C_fin=C_fin,
+                         gamma=kwargs_parse['betaB_G'],
+                         **kwargs_all)
+    elif loss_name == "betaB2":
+        if config is None:
+            C_fin=kwargs_parse['betaB_finC']
+        else:
+            C_fin=config['betaB_finC']                
+        return BetaBLossV2(C_init=kwargs_parse["betaB_initC"],
+                             C_fin=C_fin,
+                         gamma=kwargs_parse['betaB_G'],
                          **kwargs_all)
     elif loss_name == "factor":
         return FactorKLoss(kwargs_parse["device"],
@@ -143,20 +156,20 @@ class BetaHLoss(BaseLoss):
                                         storer=storer,
                                         distribution=self.rec_dist)
         cd_loss = ChamferLoss()
-        loss_cd = torch.sum(cd_loss(data,recon_data))
+        loss_cd = torch.mean(cd_loss(data,recon_data))
         kl_loss = _kl_normal_loss(*latent_dist, storer)
         anneal_reg = (linear_annealing(0, 1, self.n_train_steps, self.steps_anneal)
                       if is_train else 1)
-        print(f'(CD: {loss_cd.item(): .4f}) '
-                f'(KL: {kl_loss.item(): .4f}) '
-                f'(RL: {rec_loss.item(): .4f}) '
-                )
+        # print(f'(CD: {loss_cd.item(): .4f}) '
+        #         f'(KL: {kl_loss.item(): .4f}) '
+        #         f'(RL: {rec_loss.item(): .4f}) '
+        #         )
         loss = rec_loss + anneal_reg * (self.beta * kl_loss) + loss_cd
 
         if storer is not None:
             storer['loss'].append(loss.item())
 
-        return loss
+        return loss, rec_loss, kl_loss, loss_cd
 
 
 class BetaBLoss(BaseLoss):
@@ -197,21 +210,73 @@ class BetaBLoss(BaseLoss):
                                         distribution=self.rec_dist)
         kl_loss = _kl_normal_loss(*latent_dist, storer)
         cd_loss = ChamferLoss()
-        loss_cd = torch.sum(cd_loss(data,recon_data))
+        loss_cd = cd_loss(data,recon_data)
 
         C = (linear_annealing(self.C_init, self.C_fin, self.n_train_steps, self.steps_anneal)
              if is_train else self.C_fin)
-        print(f'(CD: {loss_cd.item(): .4f}) '
-                f'(KL: {kl_loss.item(): .4f}) '
-                f'(RL: {rec_loss.item(): .4f}) '
-                )
+        # print(f'(CD: {loss_cd.item(): .4f}) '
+        #         f'(KL: {kl_loss.item(): .4f}) '
+        #         f'(RL: {rec_loss.item(): .4f}) '
+        #         )
         loss = rec_loss + self.gamma * (kl_loss - C).abs() + loss_cd
 
         if storer is not None:
             storer['loss'].append(loss.item())
 
-        return loss
+        return loss, rec_loss, kl_loss, loss_cd
 
+class BetaBLossV2(BaseLoss):
+    """
+    Compute the Beta-VAE loss as in [1]
+
+    Parameters
+    ----------
+    C_init : float, optional
+        Starting annealed capacity C.
+
+    C_fin : float, optional
+        Final annealed capacity C.
+
+    gamma : float, optional
+        Weight of the KL divergence term.
+
+    kwargs:
+        Additional arguments for `BaseLoss`, e.g. rec_dist`.
+
+    References
+    ----------
+        [1] Burgess, Christopher P., et al. "Understanding disentangling in
+        $\beta$-VAE." arXiv preprint arXiv:1804.03599 (2018).
+    """
+
+    def __init__(self, C_init=0., C_fin=20., gamma=100., **kwargs):
+        super().__init__(**kwargs)
+        self.gamma = gamma
+        self.C_init = C_init
+        self.C_fin = C_fin
+
+    def __call__(self, data, recon_data, latent_dist, is_train, storer, **kwargs):
+        storer = self._pre_call(is_train, storer)
+
+        rec_loss = _reconstruction_loss(data, recon_data,
+                                        storer=storer,
+                                        distribution=self.rec_dist)
+        kl_loss = _kl_normal_loss(*latent_dist, storer)
+        cd_loss = ChamferLoss()
+        loss_cd = cd_loss(data,recon_data)
+
+        C = (linear_annealing(self.C_init, self.C_fin, self.n_train_steps, self.steps_anneal)
+             if is_train else self.C_fin)
+        # print(f'(CD: {loss_cd.item(): .4f}) '
+        #         f'(KL: {kl_loss.item(): .4f}) '
+        #         f'(RL: {rec_loss.item(): .4f}) '
+        #         )
+        loss = self.gamma * (kl_loss - C).abs() + loss_cd
+
+        if storer is not None:
+            storer['loss'].append(loss.item())
+
+        return loss, rec_loss, kl_loss, loss_cd
 
 class FactorKLoss(BaseLoss):
     """
@@ -424,9 +489,9 @@ class ChamferLoss(nn.Module):
         # pcd_reco = nn.functional.interpolate(pcd_reco, size=(2048), mode='nearest')
         P = self.batch_pairwise_dist(pcdgt, pcd_reco)
         mins, _ = torch.min(P, 1)
-        loss_1 = torch.sum(mins)
+        loss_1 = torch.mean(mins)
         mins, _ = torch.min(P, 2)
-        loss_2 = torch.sum(mins)
+        loss_2 = torch.mean(mins)
         return loss_1 + loss_2
 
     def batch_pairwise_dist(self, x, y):
