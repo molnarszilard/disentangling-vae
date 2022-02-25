@@ -358,7 +358,7 @@ def train(config=None, args=None):
 def test(args, model,device,logger=None, config=None):
     print("Evaluation")
     test_set = get_test_datasets(args.dataset)
-    test_loader = DataLoader(dataset=test_set, batch_size=args.eval_batchsize,shuffle=False)
+    test_loader = DataLoader(dataset=test_set, batch_size=args.eval_batchsize,shuffle=True)
     loss_f = get_loss_f(args.loss,config=config,
                         n_data=len(test_loader),
                         device=device,
@@ -382,7 +382,7 @@ def test(args, model,device,logger=None, config=None):
         loss,rec_loss, kl_loss, loss_cd = loss_f(data, recon_batch, latent_dist, not model.training,
                                 storer=None, latent_sample=latent_sample)
         cd_losses += loss_cd
-        if i==0:
+        if i==2:
             save_reco(data,recon_batch, args.checkpoint_dir, args.image_size)
     delta_time = (default_timer() - start)
     print('Finished testing after {:.1f} sec.'.format(delta_time))
