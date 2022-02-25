@@ -358,7 +358,7 @@ def train(config=None, args=None):
 def test(args, model,device,logger=None, config=None):
     print("Evaluation")
     test_set = get_test_datasets(args.dataset)
-    test_loader = DataLoader(dataset=test_set, batch_size=args.eval_batchsize,shuffle=True)
+    test_loader = DataLoader(dataset=test_set, batch_size=args.eval_batchsize,shuffle=False)
     loss_f = get_loss_f(args.loss,config=config,
                         n_data=len(test_loader),
                         device=device,
@@ -382,7 +382,7 @@ def test(args, model,device,logger=None, config=None):
         loss,rec_loss, kl_loss, loss_cd = loss_f(data, recon_batch, latent_dist, not model.training,
                                 storer=None, latent_sample=latent_sample)
         cd_losses += loss_cd
-        if i==2:
+        if i==0:
             save_reco(data,recon_batch, args.checkpoint_dir, args.image_size)
     delta_time = (default_timer() - start)
     print('Finished testing after {:.1f} sec.'.format(delta_time))
@@ -422,10 +422,10 @@ def main(args):
     if args.ray:
         config = {
             # 'batch_size': tune.choice([2, 4, 8, 16,128]),
-            'betaB_finC': tune.grid_search([50,100,150]),
+            'betaB_finC': tune.grid_search([100,200,300,400,500]),
             # 'betaB_G': tune.choice([50,100,150,1000]),
             # 'lr': tune.loguniform(1e-4, 1e-3)
-            'lr': tune.grid_search([1e-4])
+            'lr': tune.grid_search([1e-5,1e-4])
         }
         gpus_per_trial = 2
         num_samples = 1
