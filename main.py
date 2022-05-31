@@ -17,6 +17,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader, random_split
 import cv2
 import open3d as o3d
+import timeit
 
 from disvae import init_specific_model, Trainer, Evaluator
 from disvae.utils.modelIO import save_model, load_model, load_metadata
@@ -54,7 +55,7 @@ def parse_arguments(args_to_parse):
 
     # General options
     general = parser.add_argument_group('General options')
-    general.add_argument('name', type=str,
+    general.add_argument('--name', type=str,
                          help="Name of the model for storing and loading purposes.")
     general.add_argument('-L', '--log-level', help="Logging levels.",
                          default=default_config['log_level'], choices=LOG_LEVELS)
@@ -219,6 +220,36 @@ def save_reco(data,images, directory, height):
         path = os.path.join(directory, "gim_test_{}_gt.pcd".format(i)) 
         o3d.io.write_point_cloud(path,pcd)
 
+def addnoise(gim):
+    noise = (np.random.normal(0, 2, size=gim.shape)).astype(np.float32)/255
+    # print(noise)
+    return gim + noise
+
+def downsample(gim):
+    # print(gim)
+    for i in range(gim.shape[2]):
+        for j in range(gim.shape[3]):
+            if (i+j)%2:
+                gim[:,:,i,j]=0
+    # print("AFTER")
+    # print(gim.shape[2])
+    # print(gim.shape[3])
+    # print(gim)
+    return gim
+
+def downsample_fill(gim):
+    # print(gim)
+    for i in range(gim.shape[2]):
+        for j in range(gim.shape[3]):
+            if (i+j)%2:
+                if i%2 and j==0:
+                    gim[:,:,i,j]=gim[:,:,i-1,gim.shape[3]-1]
+                else:
+                    gim[:,:,i,j]=gim[:,:,i,j-1]
+    # print("AFTER")
+    # print(gim)
+    return gim
+
 def train(config=None, args=None):
     # if args.loss == "factor":
     #         logger.info("FactorVae needs 2 batches per iteration. To replicate this behavior while being consistent, we double the batch size and the the number of epochs.")
@@ -277,7 +308,11 @@ def train(config=None, args=None):
                     disable=args.no_progress_bar)
         with trange(len(train_loader), **kwargs) as t:
             # for _, (data, _) in enumerate(data_loader):
+            
             for _, data in enumerate(train_loader):
+                # data = addnoise(data)
+                # data = downsample(data)
+                data = downsample_fill(data)
                 data = data.to(device)
                 try:
                     recon_batch, latent_dist, latent_sample = model(data)
@@ -309,11 +344,15 @@ def train(config=None, args=None):
         val_steps = 0
         total = 0
         correct = 0
+        processing_time = 0
         for i, data in enumerate(val_loader, 0):
             with torch.no_grad():
                 data = data.to(device)
                 try:
+                    start_proc=timeit.default_timer()
                     recon_batch, latent_dist, latent_sample = model(data)
+                    stop_proc=timeit.default_timer()
+                    processing_time = processing_time + (stop_proc - start_proc)/(data.shape[0])
                     if args.ray:
                         with tune.checkpoint_dir(epoch) as directory:
                             save_reco(data,recon_batch,directory, args.image_size)
@@ -351,6 +390,7 @@ def train(config=None, args=None):
                     f'(CD: {val_loss_cd/ val_steps: .4f}) '
                     f'(KL: {val_loss_kl/ val_steps: .4f}) '
                     f'(RL: {val_loss_rec/ val_steps: .4f}) '
+                    f'(Time for image: {processing_time/ val_steps: .8f}) '
                     )
     delta_time = (default_timer() - start) / 60
     test(args,model,device,logger=None,config=None)
@@ -422,10 +462,10 @@ def main(args):
     if args.ray:
         config = {
             # 'batch_size': tune.choice([2, 4, 8, 16,128]),
-            'betaB_finC': tune.grid_search([100,200,300,400,500]),
-            # 'betaB_G': tune.choice([50,100,150,1000]),
+            'betaB_finC': tune.grid_search([1,10,50,100,150,200,300,400,500,1000]),
+            'betaB_G': tune.grid_search([1,10,50,100,150,1000]),
             # 'lr': tune.loguniform(1e-4, 1e-3)
-            'lr': tune.grid_search([1e-5,1e-4])
+            'lr': tune.grid_search([1e-4,5e-4,1e-3]),
         }
         gpus_per_trial = 2
         num_samples = 1

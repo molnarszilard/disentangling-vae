@@ -30,11 +30,13 @@ def get_loss_f(loss_name,config=None, **kwargs_parse):
     elif loss_name == "betaB":
         if config is None:
             C_fin=kwargs_parse['betaB_finC']
+            betaB_G=kwargs_parse['betaB_G']
         else:
-            C_fin=config['betaB_finC']                
+            C_fin=config['betaB_finC']
+            betaB_G=config['betaB_G']    
         return BetaBLoss(C_init=kwargs_parse["betaB_initC"],
                              C_fin=C_fin,
-                         gamma=kwargs_parse['betaB_G'],
+                         gamma=betaB_G,
                          **kwargs_all)
     elif loss_name == "betaB2":
         if config is None:
@@ -497,6 +499,10 @@ class ChamferLoss(nn.Module):
     def batch_pairwise_dist(self, x, y):
         bs, num_points_x, points_dim = x.size()
         _, num_points_y, _ = y.size()
+        x = x-x.min()
+        x = x/x.max()-0.5
+        y = y-y.min()
+        y = y/y.max()-0.5
         xx = torch.bmm(x, x.transpose(2, 1))
         yy = torch.bmm(y, y.transpose(2, 1))
         zz = torch.bmm(x, y.transpose(2, 1))

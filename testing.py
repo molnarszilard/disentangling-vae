@@ -232,8 +232,9 @@ def test(args, model,device,logger=None, config=None):
             save_reco(data,recon_batch, args.checkpoint_dir, args.image_size)
     delta_time = (default_timer() - start)
     print('Finished training after {:.1f} sec.'.format(delta_time))
-    print('Processed {} number of images.'.format(nr))
-    print('Time per image is: {} sec.'.format(delta_time/nr))
+    print('Processed {} number of batches.'.format(nr))
+    print('Time per batch is: {} sec.'.format(delta_time/nr))
+    print('Time per image is: {} sec.'.format(delta_time/nr/args.eval_batchsize))
 
 def main(args):
     """Main train and evaluation function.

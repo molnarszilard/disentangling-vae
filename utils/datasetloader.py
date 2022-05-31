@@ -22,11 +22,12 @@ class DatasetLoader(data.Dataset):
         gimgt=cv2.imread(pathgim,cv2.IMREAD_UNCHANGED).astype(np.float32)
         gimgt=torch.from_numpy(np.moveaxis(gimgt,-1,0))
         gimgt=gimgt/255
-        gimgt_rgb=gimgt*0
-        gimgt_rgb[0]=gimgt[1]
-        gimgt_rgb[1]=gimgt[0]
-        gimgt_rgb[2]=gimgt[2]
-        return gimgt_rgb
+        # print(gimgt)
+        # gimgt_rgb=gimgt*0
+        # gimgt_rgb[0]=gimgt[1]
+        # gimgt_rgb[1]=gimgt[0]
+        # gimgt_rgb[2]=gimgt[2]
+        return gimgt
 
     def __len__(self):
         return self.length
